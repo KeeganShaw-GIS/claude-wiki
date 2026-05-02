@@ -18,6 +18,7 @@ dist/
 *.egg
 MANIFEST
 .eggs/
+*.spec
 
 # Environments
 .env

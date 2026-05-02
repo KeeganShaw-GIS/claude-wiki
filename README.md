@@ -2,7 +2,27 @@
 
 A documentation management system for [Claude Code](https://claude.ai/code). Maintains `CLAUDE.md` files for a target git repo in a separate wiki repo and symlinks them in — so Claude Code loads the right docs at the right path depth automatically, without polluting the target's git history.
 
-Requires Python 3.11+ and the [Claude Code CLI](https://claude.ai/code) (`claude --version` to verify).
+Requires the [Claude Code CLI](https://claude.ai/code) (`claude --version` to verify).
+
+## Install
+
+**macOS / Linux — standalone binary (no Python required):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KeeganShaw-GIS/claude-wiki/main/install.sh | bash
+```
+
+**Any platform — pip (requires Python 3.11+):**
+
+```bash
+# Latest
+pipx install git+https://github.com/KeeganShaw-GIS/claude-wiki.git
+
+# Specific version
+pipx install git+https://github.com/KeeganShaw-GIS/claude-wiki.git@v0.1.0
+```
+
+---
 
 ## Quick start
 
@@ -12,8 +32,9 @@ mkdir my-project-wiki && cd my-project-wiki
 git init
 claude-wiki init --repo-path /path/to/your/repo
 
-# 2. Update schema — edit schema.yaml to promote paths to doc nodes (append +), then:
-claude-wiki sync
+# 2. Edit schema.yaml to promote paths to doc nodes (append +), then:
+claude-wiki push    # create placeholder docs + symlinks
+claude-wiki update  # LLM generates content for new entries
 
 # 3. Done — symlinks are live, docs are generated
 ```
@@ -200,25 +221,12 @@ claude-wiki update --scope staged     # staged only
 
 # Non-interactive — no questions, best-effort update (for CI)
 claude-wiki update --no-prompt
+
+# Preview what would be updated without running the LLM
+claude-wiki update --dry-run
 ```
 
 Interactive mode (default) allows Claude to propose new schema paths, ask for clarification, and create new docs. `--no-prompt` restricts tools to `Read,Edit` — existing docs only, no new files.
-
----
-
-### `sync` `D+🤖`
-
-Full cycle: `push` → `update` → `push`. The standard command after a batch of changes. `update` clears drift and new-entry logs as part of its run.
-
-```bash
-claude-wiki sync
-
-# Sync a specific area
-claude-wiki sync --scope frontend/survey
-
-# Structure only, no LLM
-claude-wiki sync --no-llm
-```
 
 ---
 
@@ -238,7 +246,7 @@ claude-wiki eject --scope frontend/survey
 
 ## Hooks
 
-All hooks are **fully deterministic** — no LLM is ever invoked by a hook. The drift log they build up is consumed later by `update` or `sync`, which you run manually.
+All hooks are **fully deterministic** — no LLM is ever invoked by a hook. The drift log they build up is consumed later by `update`, which you run manually.
 
 | Hook | Trigger | What it runs | `D/🤖` |
 |------|---------|-------------|--------|
@@ -297,9 +305,8 @@ my-target-repo/
 Developers can run any wiki command directly from the target repo:
 
 ```bash
-.claude-wiki/wiki update --scope src/payments
-.claude-wiki/wiki sync
 .claude-wiki/wiki push
+.claude-wiki/wiki update --scope src/payments
 ```
 
 Claude Code agents working in the target repo can do the same — they see the `CLAUDE.md` outputs via symlinks and can trigger updates through `.claude-wiki/wiki`.

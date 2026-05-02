@@ -11,5 +11,8 @@ requires-python = ">=3.11"
 [project.scripts]
 claude-wiki = "wiki.cli:main"
 
+[project.optional-dependencies]
+build = ["pyinstaller"]
+
 [tool.setuptools.packages.find]
 include = ["wiki*"]
