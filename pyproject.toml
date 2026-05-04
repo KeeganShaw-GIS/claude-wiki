@@ -16,3 +16,6 @@ build = ["pyinstaller"]
 
 [tool.setuptools.packages.find]
 include = ["wiki*"]
+
+[tool.setuptools.package-data]
+"wiki" = ["templates/*.md"]

@@ -16,7 +16,11 @@ import os
 import stat
 import subprocess
 
-from .lib import FLAGS_FILE, SCHEMA_FILE, WIKI_ROOT, get_repo_path, load_schema, symlink_path, walk_schema
+from .lib import (
+    CONFLICT_LOG, DRIFT_LOG, FLAGS_FILE, INSTRUCTIONS_FILE, NEW_ENTRY_LOG,
+    SCHEMA_FILE, TEMPLATE_FILE, WIKI_ROOT, WIKI_MERGE_FILE, WIKI_UPDATE_FILE,
+    get_repo_path, load_schema, symlink_path, walk_schema,
+)
 
 
 _WRAPPER_SCRIPT = """\
@@ -39,7 +43,6 @@ exit 0
 _POST_CHECKOUT = """\
 #!/usr/bin/env bash
 # claude-wiki: create missing docs and symlinks after clone or branch switch.
-# Deterministic — no LLM. New docs get a placeholder; run update to populate.
 ROOT=$(git rev-parse --show-toplevel)
 "$ROOT/.claude-wiki/wiki" push 2>/dev/null || true
 exit 0
@@ -59,14 +62,6 @@ def _setup_claude_wiki_dir(repo):
     wrapper.write_text(_WRAPPER_SCRIPT)
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    # Symlink to wiki's llm.md — visible to LLMs working in the target repo
-    llm_link = cw_dir / "llm.md"
-    if llm_link.exists() or llm_link.is_symlink():
-        llm_link.unlink()
-    llm_target = WIKI_ROOT / "llm.md"
-    rel = os.path.relpath(llm_target, cw_dir)
-    llm_link.symlink_to(rel)
-
     # Symlink to wiki's flags.json — exposes wiki status to agents in the target repo
     flags_link = cw_dir / "flags.json"
     if flags_link.exists() or flags_link.is_symlink():
@@ -81,6 +76,41 @@ def _setup_claude_wiki_dir(repo):
     rel_schema = os.path.relpath(SCHEMA_FILE, cw_dir)
     schema_link.symlink_to(rel_schema)
 
+    # Symlinks to operational files in .claude-wiki/ root
+    for src, name in [
+        (TEMPLATE_FILE,     "CLAUDE.template.md"),
+        (INSTRUCTIONS_FILE, "instructions.md"),
+        (DRIFT_LOG,         "drift.jsonl"),
+        (NEW_ENTRY_LOG,     "new-entry.jsonl"),
+        (CONFLICT_LOG,      "conflict.jsonl"),
+    ]:
+        link = cw_dir / name
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        if src.exists():
+            rel = os.path.relpath(src, cw_dir)
+            link.symlink_to(rel)
+            print(f"  [symlink]  .claude-wiki/{name} -> {rel}")
+
+    # agents/ subdirectory — LLM guidance docs
+    agents_dir = cw_dir / "agents"
+    agents_dir.mkdir(exist_ok=True)
+
+    llm_target = WIKI_ROOT / "llm.md"
+    rel_llm = os.path.relpath(llm_target, agents_dir)
+    for src, name in [
+        (llm_target,       "llm.md"),
+        (WIKI_UPDATE_FILE, "WIKI_UPDATE.md"),
+        (WIKI_MERGE_FILE,  "WIKI_MERGE.md"),
+    ]:
+        link = agents_dir / name
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        if src.exists():
+            rel = os.path.relpath(src, agents_dir)
+            link.symlink_to(rel)
+            print(f"  [symlink]  .claude-wiki/agents/{name} -> {rel}")
+
     # Add .claude-wiki to .gitignore
     gitignore = repo / ".gitignore"
     entry = ".claude-wiki"
@@ -94,9 +124,9 @@ def _setup_claude_wiki_dir(repo):
         print(f"  [created]  .gitignore  (with .claude-wiki entry)")
 
     print(f"  [created]  .claude-wiki/wiki  (wrapper script)")
-    print(f"  [symlink]  .claude-wiki/llm.md     -> {rel}")
     print(f"  [symlink]  .claude-wiki/flags.json -> {rel_flags}")
     print(f"  [symlink]  .claude-wiki/schema.yaml -> {rel_schema}")
+    print(f"  [dir]      .claude-wiki/agents/")
 
 
 def run_hook_setup(

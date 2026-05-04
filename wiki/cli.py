@@ -5,7 +5,7 @@ Commands:
   push              Sync schema <-> wiki docs <-> target symlinks
   pull              Absorb unmanaged CLAUDE.md files from the target repo
   detect-drift      Log changed files that need doc updates (pre-commit)
-  update            LLM reads source files and updates docs by scope
+  status            Show pending drift statistics
 """
 
 import argparse
@@ -31,11 +31,6 @@ def cmd_detect_drift(args):
     run_detect_drift(staged_only=args.staged)
 
 
-def cmd_update_docs(args):
-    from .validate import run_update_docs
-    run_update_docs(scope=args.scope, no_prompt=args.no_prompt, dry_run=args.dry_run)
-
-
 def cmd_eject(args):
     from .eject import run_eject
     run_eject(scope=args.scope)
@@ -46,9 +41,9 @@ def cmd_pull_docs(args):
     run_pull_docs(strategy=args.strategy)
 
 
-def cmd_merge(args):
-    from .merge import run_merge
-    run_merge(scope=args.scope, prompt=args.prompt or "", no_prompt=args.no_prompt)
+def cmd_status(args):
+    from .status import run_status
+    run_status(scope=args.scope)
 
 
 def cmd_hook_setup(args):
@@ -60,11 +55,54 @@ def cmd_hook_setup(args):
     )
 
 
+def _stamp_drift_checked():
+    """Stamp SourceCommitID=HEAD on every doc currently in the drift log."""
+    from .lib import (
+        doc_path, get_repo_path, git_head_hash, load_drift_log,
+        write_metadata_footer,
+    )
+    repo = get_repo_path()
+    head = git_head_hash(repo)
+    if not head:
+        return
+    for entry in load_drift_log():
+        rel_path = entry.get("rel_path", "")
+        dp = doc_path(rel_path)
+        if dp.exists():
+            write_metadata_footer(dp, rel_path, "claude-wiki clear-flags",
+                                  source_commit=head)
+            print(f"  [stamped]  {entry.get('wiki_doc', rel_path)}  SourceCommitID={head}")
+
+
+def cmd_add_agent(args):
+    from pathlib import Path
+    from .lib import get_repo_path
+    repo = get_repo_path()
+    agents_dir = repo / ".claude-wiki" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    name = args.name if args.name.endswith(".md") else args.name + ".md"
+    target = agents_dir / name
+    if target.exists():
+        print(f"  [exists]  .claude-wiki/agents/{name}")
+        return
+    target.write_text("")
+    print(f"  [created]  .claude-wiki/agents/{name}")
+
+
 def cmd_clear_flags(args):
     from .lib import (
         clear_flag, load_flags, load_conflict_log, load_drift_log,
         load_new_entry_log, FLAGS_FILE,
     )
+
+    # When explicitly clearing drift_detected, stamp SourceCommitID on each drifted doc
+    flags_to_clear = set(args.flag or [])
+    clearing_drift = (
+        "drift_detected" in flags_to_clear
+        or (not args.flag)  # clearing all flags
+    )
+    if clearing_drift and load_drift_log():
+        _stamp_drift_checked()
 
     # Auto-resolve flags whose backing log is now empty
     _auto_clear = {
@@ -120,12 +158,6 @@ def main():
     p_dd = sub.add_parser("detect-drift", help="Log changed files (pre-commit hook)")
     p_dd.add_argument("--staged", action="store_true")
 
-    p_v = sub.add_parser("update", help="LLM reads source files and updates docs by scope")
-    p_v.add_argument("--scope", default=None, metavar="SCOPE")
-    p_v.add_argument("--no-prompt", action="store_true")
-    p_v.add_argument("--dry-run", action="store_true",
-                     help="Show what would be updated without running the LLM")
-
     p_e = sub.add_parser("eject", help="Replace symlinks with real files, detaching from wiki")
     p_e.add_argument("--scope", default=None, metavar="PATH",
                      help="Schema rel-path to eject (e.g. frontend/walleter). Default: all.")
@@ -137,15 +169,6 @@ def main():
         help="Conflict resolution: skip (default, flag both), wiki (keep wiki), repo (keep repo)",
     )
 
-    p_merge = sub.add_parser("merge",
-                              help="LLM-assisted merge of conflicting wiki and repo CLAUDE.md versions")
-    p_merge.add_argument("--scope", default=None, metavar="PATH",
-                         help="Limit merge to a specific schema rel-path")
-    p_merge.add_argument("--prompt", default=None, metavar="TEXT",
-                         help="Optional context passed to the LLM to guide the merge")
-    p_merge.add_argument("--no-prompt", action="store_true",
-                         help="Non-interactive mode (no clarifying questions)")
-
     p_hs = sub.add_parser("hook-setup",
                           help="Install git hooks and wiki-path config in the target repo")
     p_hs.add_argument("--no-pre-commit", action="store_true",
@@ -154,6 +177,14 @@ def main():
                       help="Skip installing the post-checkout hook (push --verify)")
     p_hs.add_argument("--no-skip-worktree", action="store_true",
                       help="Skip marking CLAUDE.md symlinks as skip-worktree")
+
+    p_st = sub.add_parser("status", help="Show pending drift statistics")
+    p_st.add_argument("--scope", default=None, metavar="SCOPE",
+                      help="Scope: path, diff, staged, or git ref. Default: drift + new-entry logs.")
+
+    p_aa = sub.add_parser("add-agent", help="Create a blank agent doc in .claude-wiki/agents/")
+    p_aa.add_argument("--name", required=True, metavar="NAME",
+                      help="Agent doc filename (e.g. researcher or researcher.md)")
 
     p_cf = sub.add_parser("clear-flags", help="Manually clear one or all wiki status flags")
     p_cf.add_argument("--flag", action="append", metavar="FLAG",
@@ -178,11 +209,11 @@ def main():
         "clear-flags": cmd_clear_flags,
         "push": cmd_push_docs,
         "detect-drift": cmd_detect_drift,
-        "update": cmd_update_docs,
         "eject": cmd_eject,
         "pull": cmd_pull_docs,
-        "merge": cmd_merge,
         "hook-setup": cmd_hook_setup,
+        "status": cmd_status,
+        "add-agent": cmd_add_agent,
     }
     dispatch[args.command](args)
 

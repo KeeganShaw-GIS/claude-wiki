@@ -16,14 +16,14 @@ This is a **documentation wiki** — a separate repo that maintains CLAUDE.md fi
 | `schema.yaml` | Source of truth for which paths have docs |
 | `docs/<path>/CLAUDE.md` | Documentation for `<path>` in the target repo |
 | `config.json` | Target repo path (set by `init`, gitignored) |
-| `logs/drift.jsonl` | Source files changed since last sync (cleared by `update`) |
-| `logs/new-entry.jsonl` | Schema entries created since last update run (cleared by `update`) |
-| `logs/sync.jsonl` | Permanent update history |
+| `logs/drift.jsonl` | Source files changed since last sync |
+| `logs/new-entry.jsonl` | Schema entries pending documentation |
+| `logs/sync.jsonl` | Permanent sync history |
 
 ## When working in this repo
 
 - All doc content goes in `docs/`. Never edit files outside `docs/` to document the target repo.
-- To add a new documented path: add it to `schema.yaml`, then run `push`. The new entry is logged to `logs/new-entry.jsonl` with a placeholder doc. Run `update` (no scope) to generate content for all pending new entries.
+- To add a new documented path: add it to `schema.yaml`, then run `push`. The new entry is logged to `logs/new-entry.jsonl` with a placeholder doc. Populate it manually, then run `clear-flags --flag new_entry`.
 - `config.json` is gitignored — each developer sets their own repo path via `init`.
 - Docs placed at `docs/<path>/CLAUDE.md` cover only the code at or below `<path>`.
   Place shared concerns at the nearest common ancestor in the schema.
@@ -42,17 +42,18 @@ claude-wiki init --repo-path <path>   # First-time setup (absorbs existing docs,
 claude-wiki push                      # Sync symlinks with schema; logs new entries
 claude-wiki push --verify             # Rebuild broken symlinks
 claude-wiki pull                      # Absorb unmanaged CLAUDE.md files from the target
-claude-wiki detect-drift              # Log changed files (manual)
-claude-wiki update [--scope X]        # LLM doc update; picks up drift + new-entry logs; clears both
-claude-wiki update --dry-run          # Preview what would be updated without running the LLM
+claude-wiki detect-drift              # Recompute drift from SourceCommitIDs (manual)
+claude-wiki status [--scope X]        # Show pending drift statistics
+claude-wiki clear-flags [--flag X]    # Clear flags; stamps SourceCommitID when clearing drift
 ```
 
 ## Updating documentation
 
-When adding or changing any CLI command, flag, or workflow behavior, always update all three documentation surfaces together:
+When adding or changing any CLI command, flag, or workflow behavior, always update all four documentation surfaces together:
 
 - **`README.md`** — user-facing project overview
-- **`wiki/init.py` → `_WIKI_INSTRUCTIONS`** — written to `wiki-instructions.md` on `init`; the quickstart guide new users see
-- **`wiki/init.py` → `_LLM_MD`** — written to `llm.md` on `init`; the reference loaded by LLMs working in target repos
+- **`wiki/templates/wiki-instructions.md`** — written to `wiki-instructions.md` on `init`; the quickstart guide new users see
+- **`wiki/templates/llm.md`** — written to `llm.md` on `init`; the reference loaded by LLMs working in target repos
+- **`wiki/templates/WIKI_UPDATE.md`** — step-by-step drift/update guide symlinked into `.claude-wiki/`
 
-These three must stay in sync. A change documented in one but not the others will cause agents or users to act on stale information.
+These must stay in sync. A change documented in one but not the others will cause agents or users to act on stale information.

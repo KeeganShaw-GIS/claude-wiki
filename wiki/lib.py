@@ -14,14 +14,12 @@ CONFIG_FILE = WIKI_ROOT / "config.json"
 DOCS_ROOT = WIKI_ROOT / "docs"
 TEMPLATE_FILE = WIKI_ROOT / "templates" / "CLAUDE.template.md"
 INSTRUCTIONS_FILE = WIKI_ROOT / "templates" / "instructions.md"
-MERGE_PROMPT_FILE = WIKI_ROOT / "templates" / "merge-prompt.md"
-UPDATE_PROMPT_NEW_FILE = WIKI_ROOT / "templates" / "update-prompt-new.md"
-UPDATE_PROMPT_EXISTING_FILE = WIKI_ROOT / "templates" / "update-prompt-existing.md"
+WIKI_UPDATE_FILE = WIKI_ROOT / "templates" / "WIKI_UPDATE.md"
+WIKI_MERGE_FILE = WIKI_ROOT / "templates" / "WIKI_MERGE.md"
 DRIFT_LOG = WIKI_ROOT / "logs" / "drift.jsonl"
 SYNC_LOG = WIKI_ROOT / "logs" / "sync.jsonl"
 NEW_ENTRY_LOG = WIKI_ROOT / "logs" / "new-entry.jsonl"
 CONFLICT_LOG = WIKI_ROOT / "logs" / "conflict.jsonl"
-MERGE_LOG = WIKI_ROOT / "logs" / "merge.jsonl"
 FLAGS_FILE = WIKI_ROOT / "logs" / "flags.json"
 
 
@@ -256,6 +254,24 @@ def git_head_hash(repo: Path) -> Optional[str]:
     return h if h else None
 
 
+def git_log_range(repo: Path, from_commit: str, path: str = "") -> list[str]:
+    """Return files changed between from_commit and HEAD under path (target repo)."""
+    cmd = ["git", "-C", str(repo), "diff", "--name-only", f"{from_commit}..HEAD"]
+    if path:
+        cmd += ["--", path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return [f for f in result.stdout.strip().split("\n") if f]
+
+
+def commit_is_ancestor(repo: Path, commit: str) -> bool:
+    """Return True if commit exists and is an ancestor of HEAD."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, "HEAD"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
 # ── Metadata footer ──────────────────────────────────────────────────────────
 
 _METADATA_MARKER = "<!-- claude-wiki-meta"
@@ -295,20 +311,47 @@ def strip_metadata_footer(content: str) -> str:
     return content
 
 
-def write_metadata_footer(doc: Path, rel_path: str, touched_by: str):
+def read_metadata_footer(doc: Path) -> dict:
+    """Return key→value pairs from the claude-wiki-meta footer, or {}."""
+    if not doc.exists():
+        return {}
+    content = doc.read_text()
+    start = content.find(_METADATA_MARKER)
+    if start == -1:
+        return {}
+    end = content.find(_METADATA_END, start)
+    if end == -1:
+        return {}
+    block = content[start + len(_METADATA_MARKER):end]
+    result = {}
+    for line in block.strip().splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            result[k.strip()] = v.strip()
+    return result
+
+
+def write_metadata_footer(doc: Path, rel_path: str, touched_by: str,
+                          source_commit: Optional[str] = None):
     from datetime import date
     content = doc.read_text() if doc.exists() else ""
+    # Preserve existing SourceCommitID if not explicitly provided
+    if source_commit is None:
+        existing = read_metadata_footer(doc)
+        source_commit = existing.get("SourceCommitID")
     content = strip_metadata_footer(content)
     location = f"{rel_path}/CLAUDE.md" if rel_path else "CLAUDE.md"
-    commit = get_wiki_commit_id()
+    wiki_commit = get_wiki_commit_id()
     lines = [
         _METADATA_MARKER,
         f"Location: {location}",
         f"LastTouchedBy: {touched_by}",
         f"ChangeDate: {date.today().isoformat()}",
     ]
-    if commit:
-        lines.append(f"WikiCommitID: {commit}")
+    if wiki_commit:
+        lines.append(f"WikiCommitID: {wiki_commit}")
+    if source_commit:
+        lines.append(f"SourceCommitID: {source_commit}")
     lines.append(_METADATA_END)
     doc.write_text(content.rstrip() + "\n\n" + "\n".join(lines) + "\n")
 

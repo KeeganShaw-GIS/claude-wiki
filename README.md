@@ -34,9 +34,8 @@ claude-wiki init --repo-path /path/to/your/repo
 
 # 2. Edit schema.yaml to promote paths to doc nodes (append +), then:
 claude-wiki push    # create placeholder docs + symlinks
-claude-wiki update  # LLM generates content for new entries
 
-# 3. Done — symlinks are live, docs are generated
+# 3. Done — symlinks are live, populate docs manually
 ```
 
 Every command must be run from the wiki root (where `config.json` lives).
@@ -115,15 +114,15 @@ Editing `docs/frontend/survey/CLAUDE.md` in the wiki is immediately reflected in
 
 ### `templates/instructions.md`
 
-Created on `init`. Injected into every `update` prompt as house rules — edit it to control how the LLM writes and structures docs. Never overwritten after first creation.
+Created on `init`. House rules for writing CLAUDE.md content — edit it to control doc style and structure. Never overwritten after first creation.
 
 ### `templates/CLAUDE.template.md`
 
-Placeholder written by `push` when a new doc is created. Contains a "not yet populated" banner with instructions to run `update`. No LLM involved.
+Placeholder written by `push` when a new doc is created. Contains a "not yet populated" banner. Populate docs manually after running `push`.
 
 ---
 
-> **Key:** `D` Deterministic · `🤖` LLM · `D+🤖` Deterministic with optional LLM step
+> **Key:** `D` Deterministic
 
 ## Commands
 
@@ -131,7 +130,7 @@ Placeholder written by `push` when a new doc is created. Contains a "not yet pop
 
 ### `init` `D`
 
-One-time setup. Run from an empty wiki directory. Fully deterministic — no LLM is invoked. After init, run `update` when you're ready to generate doc content.
+One-time setup. Run from an empty wiki directory. Fully deterministic — no LLM is invoked. After init, populate placeholder docs manually.
 
 ```bash
 claude-wiki init --repo-path /path/to/repo
@@ -150,7 +149,7 @@ claude-wiki init --repo-path /path/to/repo --no-hooks
 4. Absorbs any existing `CLAUDE.md` files from the target via `pull` (skip with `--no-detect-target-docs`) `D`
 5. Runs `push` to create docs and symlinks `D`
 6. Runs `hook-setup` to install git hooks (skip with `--no-hooks`) `D`
-7. Prints any new-entry paths that need `update` to generate content
+7. Prints any new-entry paths that need manual doc population
 
 ---
 
@@ -200,33 +199,32 @@ claude-wiki push --verify
 
 ---
 
-### `update` `🤖`
+### `detect-drift` `D`
 
-Uses the Claude CLI to read source files and update the relevant wiki doc. When run without `--scope`, picks up entries from both `drift.jsonl` (changed source files) and `new-entry.jsonl` (newly created docs), then clears both logs on completion. Injects `templates/instructions.md` as house rules into every prompt.
+Computes drift by comparing each doc's `SourceCommitID` footer against `HEAD` in the target repo. For each doc with changes, logs a `drift.jsonl` entry containing the commit range and changed files — enough to run `git diff <from>..<to> -- <path>/` directly. Idempotent: re-running overwrites stale entries rather than appending.
 
-New docs (placeholder content) use a "generate from scratch" prompt; Claude scans all files under the path. Updated docs use a targeted "update sections that changed" prompt.
+Called automatically by the pre-commit hook (`--staged`). Safe to run manually at any time, including on repos that never had the hook installed.
 
 ```bash
-# Update from drift + new-entry logs (clears both after)
-claude-wiki update
-
-# Update a specific directory or file
-claude-wiki update --scope frontend/survey
-claude-wiki update --scope frontend/survey/App.tsx
-
-# Update all files changed vs a git ref
-claude-wiki update --scope main
-claude-wiki update --scope diff       # all staged + unstaged
-claude-wiki update --scope staged     # staged only
-
-# Non-interactive — no questions, best-effort update (for CI)
-claude-wiki update --no-prompt
-
-# Preview what would be updated without running the LLM
-claude-wiki update --dry-run
+claude-wiki detect-drift           # recompute all drift from SourceCommitIDs
+claude-wiki detect-drift --staged  # narrow to staged files only
 ```
 
-Interactive mode (default) allows Claude to propose new schema paths, ask for clarification, and create new docs. `--no-prompt` restricts tools to `Read,Edit` — existing docs only, no new files.
+---
+
+### `status` `D`
+
+Shows pending drift statistics — which docs need attention and why. Reads `drift.jsonl` and `new-entry.jsonl`; no LLM involved.
+
+```bash
+# Show all pending docs from drift + new-entry logs
+claude-wiki status
+
+# Show docs affected by a specific path, ref, or diff
+claude-wiki status --scope frontend/survey
+claude-wiki status --scope diff
+claude-wiki status --scope staged
+```
 
 ---
 
@@ -244,9 +242,20 @@ claude-wiki eject --scope frontend/survey
 
 ---
 
+### `add-agent` `D`
+
+Creates a blank `.md` file in `.claude-wiki/agents/` of the target repo. Use this to add custom agent guidance docs that live alongside the standard `llm.md`, `WIKI_UPDATE.md`, and `WIKI_MERGE.md` symlinks.
+
+```bash
+claude-wiki add-agent --name researcher
+# creates .claude-wiki/agents/researcher.md  (empty)
+```
+
+---
+
 ## Hooks
 
-All hooks are **fully deterministic** — no LLM is ever invoked by a hook. The drift log they build up is consumed later by `update`, which you run manually.
+All hooks are **fully deterministic** — no LLM is ever invoked by a hook. The drift log they build up is visible via `claude-wiki status`.
 
 | Hook | Trigger | What it runs | `D/🤖` |
 |------|---------|-------------|--------|
@@ -261,8 +270,8 @@ Hooks call `.claude-wiki/wiki` in the target repo. The wrapper resolves the wiki
 
 | Stage | Flag to skip | `D/🤖` | What it does |
 |-------|-------------|--------|-------------|
-| `.claude-wiki/` | (always) | `D` | Creates `.claude-wiki/wiki` wrapper script and `.claude-wiki/llm.md` symlink in the target repo. Adds `.claude-wiki` to `.gitignore`. This is the single entry point for all wiki commands run from the target repo. |
-| `pre-commit` | `--no-pre-commit` | `D` | Installs `.git/hooks/pre-commit`. Before each commit, logs changed source files and their mapped wiki docs to `drift.jsonl`. Always exits 0 — never blocks a commit. |
+| `.claude-wiki/` | (always) | `D` | Creates `.claude-wiki/wiki` wrapper script, operational symlinks (flags.json, schema.yaml, CLAUDE.template.md, instructions.md), and the `agents/` subdirectory with llm.md, WIKI_UPDATE.md, WIKI_MERGE.md symlinks. Adds `.claude-wiki` to `.gitignore`. |
+| `pre-commit` | `--no-pre-commit` | `D` | Installs `.git/hooks/pre-commit`. Before each commit, runs `detect-drift --staged` to recompute drift for staged files. Always exits 0 — never blocks a commit. |
 | `post-checkout` | `--no-post-checkout` | `D` | Installs `.git/hooks/post-checkout`. After checkout or clone, runs `push` to create any missing docs and symlinks. New docs get a placeholder template and are logged to `new-entry.jsonl`. |
 | `skip-worktree` | `--no-skip-worktree` | `D` | Marks every managed `CLAUDE.md` symlink `skip-worktree` so git never shows them as unstaged changes. Skip if you use sparse checkout or a tool that resets index flags. |
 
@@ -281,11 +290,13 @@ my-project-wiki/
 │   └── <path>/CLAUDE.md
 ├── templates/
 │   ├── CLAUDE.template.md   # Placeholder written when push creates a new doc
-│   └── instructions.md      # House rules injected into every update prompt
+│   ├── instructions.md      # House rules for writing CLAUDE.md content
+│   ├── WIKI_UPDATE.md       # Step-by-step guide for updating docs (user-editable)
+│   └── WIKI_MERGE.md        # Step-by-step guide for resolving conflicts (user-editable)
 ├── logs/
-│   ├── drift.jsonl          # Changed source files (cleared by update no-scope)
-│   ├── new-entry.jsonl      # New schema entries (cleared by update after processing)
-│   └── sync.jsonl           # Permanent update history
+│   ├── drift.jsonl          # Per-doc drift entries with commit range + changed files
+│   ├── new-entry.jsonl      # New schema entries pending documentation
+│   └── sync.jsonl           # Permanent sync history
 └── scripts/
     └── wiki.py              # Backward-compat shim for git hooks
 ```
@@ -299,17 +310,25 @@ my-target-repo/
 └── .claude-wiki/            # Gitignored — created by hook-setup
     ├── wiki                 # Wrapper: runs claude-wiki from inside the target repo
     ├── wiki-path            # Path to the wiki root (read by wrapper)
-    └── llm.md               # Symlink → <wiki>/llm.md
+    ├── flags.json           # Symlink → <wiki>/logs/flags.json
+    ├── schema.yaml          # Symlink → <wiki>/schema.yaml
+    ├── CLAUDE.template.md   # Symlink → <wiki>/templates/CLAUDE.template.md
+    ├── instructions.md      # Symlink → <wiki>/templates/instructions.md
+    └── agents/              # LLM guidance docs
+        ├── llm.md           # Symlink → <wiki>/llm.md
+        ├── WIKI_UPDATE.md   # Symlink → <wiki>/templates/WIKI_UPDATE.md
+        ├── WIKI_MERGE.md    # Symlink → <wiki>/templates/WIKI_MERGE.md
+        └── <name>.md        # User-added agent docs (via `add-agent --name <name>`)
 ```
 
 Developers can run any wiki command directly from the target repo:
 
 ```bash
 .claude-wiki/wiki push
-.claude-wiki/wiki update --scope src/payments
+.claude-wiki/wiki status
 ```
 
-Claude Code agents working in the target repo can do the same — they see the `CLAUDE.md` outputs via symlinks and can trigger updates through `.claude-wiki/wiki`.
+Claude Code agents working in the target repo can do the same — they see the `CLAUDE.md` outputs via symlinks and can run wiki commands through `.claude-wiki/wiki`.
 
 ### Doc metadata footer
 
@@ -318,10 +337,11 @@ Every managed `CLAUDE.md` gets a metadata block appended automatically:
 ```
 <!-- claude-wiki-meta
 Location: frontend/survey/CLAUDE.md
-LastTouchedBy: claude-wiki update
+LastTouchedBy: claude-wiki push
 ChangeDate: 2026-05-01
 WikiCommitID: abc1234
+SourceCommitID: def5678
 -->
 ```
 
-This block is updated on every `update` or `push` run and stripped when you `eject`.
+`SourceCommitID` is the target repo commit the doc was last reviewed against. `detect-drift` computes `git diff <SourceCommitID>..HEAD -- <path>/` to find what changed. `clear-flags --flag drift_detected` stamps it to the current HEAD. Stripped when you `eject`.
